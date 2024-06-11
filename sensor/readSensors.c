@@ -9,6 +9,7 @@
 #include <sys/types.h>
 #include <unistd.h>
 #include <json-c/json.h>
+#include <mysql/mysql.h>
 
 #define CS_MCP3208 8
 #define SPI_CHANNEL 0
@@ -26,6 +27,7 @@ int read_mcp3208_adc(unsigned char adcChannel);
 int read_dht22_dat();
 void sig_handler(int signo);
 uint8_t sizecvt(const int read);
+void finish_with_error(MYSQL *con);
 
 int main(void) {
     unsigned char adcChannel_light = 0;
@@ -45,6 +47,23 @@ int main(void) {
     pinMode(CS_MCP3208, OUTPUT);
     pinMode(PUMP, OUTPUT);
 
+    // MariaDB 연결 정보 설정
+    const char *host = "192.168.123.102"; // 또는 실제 호스트 이름 또는 IP 주소
+    const char *user = "mergen";
+    const char *password = "bumtan55";
+    const char *database = "smart_flower_pot";
+    unsigned int port = 3306; // 기본 포트 번호
+
+    MYSQL *con = mysql_init(NULL);
+    if (con == NULL) {
+        fprintf(stderr, "mysql_init() failed\n");
+        return 1;
+    }
+
+    if (mysql_real_connect(con, host, user, password, database, port, NULL, 0) == NULL) {
+        finish_with_error(con);
+    }
+
     while (1) {
         adcValue_light = read_mcp3208_adc(adcChannel_light);
         while (read_dht22_dat() == 0) {
@@ -63,11 +82,27 @@ int main(void) {
 
         printf("%s\n", json_object_to_json_string(jobj));
 
-        json_object_put(jobj);
+        // 데이터베이스에 삽입
+        char query[256];
+        snprintf(query, sizeof(query), "INSERT INTO sensor_data (temperature, humidity, light) VALUES (%d, %d, %d)",
+                 received_temp, ret_humid, adcValue_light);
 
+        if (mysql_query(con, query)) {
+            finish_with_error(con);
+        }
+
+        json_object_put(jobj);
         delay(5000);
     }
+
+    mysql_close(con);
     return 0;
+}
+
+void finish_with_error(MYSQL *con) {
+    fprintf(stderr, "%s\n", mysql_error(con));
+    mysql_close(con);
+    exit(1);
 }
 
 int read_mcp3208_adc(unsigned char adcChannel) {
